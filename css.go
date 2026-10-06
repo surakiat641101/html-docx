@@ -1,6 +1,7 @@
 package htmldocx
 
 import (
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -230,4 +231,100 @@ func parseHTMLFontSize(v string) (float64, bool) {
 	}
 	n = max(1, min(7, n))
 	return htmlFontSizes[n-1], true
+}
+
+// boxSides reads a margin/padding shorthand and its -top/-right/-bottom/-left
+// longhands, returning points in top, right, bottom, left order.
+func boxSides(css map[string]string, prop string, fontPt float64) (pt [4]float64, ok [4]bool) {
+	if v, has := css[prop]; has {
+		f := strings.Fields(v)
+		order := map[int][4]int{1: {0, 0, 0, 0}, 2: {0, 1, 0, 1}, 3: {0, 1, 2, 1}, 4: {0, 1, 2, 3}}
+		if idx, valid := order[len(f)]; valid {
+			for i := range 4 {
+				pt[i], ok[i] = parseLength(f[idx[i]], fontPt)
+			}
+		}
+	}
+	for i, side := range [...]string{"top", "right", "bottom", "left"} {
+		if v, has := css[prop+"-"+side]; has {
+			pt[i], ok[i] = parseLength(v, fontPt)
+		}
+	}
+	return pt, ok
+}
+
+// parseLineHeight converts CSS line-height to a Word w:line value and rule.
+func parseLineHeight(v string, fontPt float64) (int, string) {
+	v = strings.ToLower(strings.TrimSpace(v))
+	if n, err := strconv.ParseFloat(v, 64); err == nil && n > 0 {
+		return int(math.Round(240 * n)), "auto"
+	}
+	if p, ok := strings.CutSuffix(v, "%"); ok {
+		if n, err := strconv.ParseFloat(p, 64); err == nil && n > 0 {
+			return int(math.Round(240 * n / 100)), "auto"
+		}
+	}
+	if pt, ok := parseLength(v, fontPt); ok && pt > 0 {
+		// atLeast rather than exact so inline images and tall Thai marks are not clipped.
+		return int(math.Round(pt * 20)), "atLeast"
+	}
+	return 0, ""
+}
+
+// Word line styles for CSS border/text-decoration styles.
+var (
+	wordLineStyles   = map[string]string{"solid": "single", "double": "double", "dotted": "dotted", "dashed": "dash", "wavy": "wave"}
+	wordBorderStyles = map[string]string{"solid": "single", "double": "double", "dotted": "dotted", "dashed": "dashed",
+		"groove": "threeDEngrave", "ridge": "threeDEmboss", "inset": "inset", "outset": "outset"}
+)
+
+var borderWidthKeywords = map[string]float64{"thin": 0.75, "medium": 2.25, "thick": 3.75}
+
+// cssBorderSide returns the attributes of a Word border element for one side
+// ("top", "left", ...) or, with side "", for the "border" shorthand alone.
+func cssBorderSide(css map[string]string, side string) (string, bool) {
+	v, has := "", false
+	if side != "" {
+		v, has = css["border-"+side]
+	}
+	if !has {
+		v, has = css["border"]
+	}
+	if !has {
+		return "", false
+	}
+	style, width, color := "", 2.25, "auto"
+	for _, f := range strings.Fields(strings.ToLower(v)) {
+		if f == "none" || f == "hidden" {
+			return "", false
+		}
+		if s, ok := wordBorderStyles[f]; ok {
+			style = s
+		} else if w, ok := borderWidthKeywords[f]; ok {
+			width = w
+		} else if w, ok := parseLength(f, 12); ok {
+			width = w
+		} else if col, ok := parseColor(f); ok {
+			color = col
+		}
+	}
+	if style == "" || width <= 0 {
+		return "", false
+	}
+	sz := max(2, min(96, int(math.Round(width*8)))) // eighths of a point
+	return fmt.Sprintf(`w:val="%s" w:sz="%d" w:space="1" w:color="%s"`, style, sz, color), true
+}
+
+// bottomBorderUnderline maps an inline border-bottom to a Word underline style.
+func bottomBorderUnderline(css map[string]string) (string, bool) {
+	v, ok := css["border-bottom"]
+	if !ok {
+		return "", false
+	}
+	for _, f := range strings.Fields(strings.ToLower(v)) {
+		if s, ok := wordLineStyles[f]; ok {
+			return s, true
+		}
+	}
+	return "", false
 }

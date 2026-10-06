@@ -157,9 +157,10 @@ func (c *converter) documentXML() []byte {
 		b.WriteString("<w:p/>") // Word expects a paragraph after a final table
 	}
 	fmt.Fprintf(&b, `<w:sectPr><w:pgSz w:w="%d" w:h="%d"%s/>`+
-		`<w:pgMar w:top="%d" w:right="%d" w:bottom="%d" w:left="%d" w:header="720" w:footer="720" w:gutter="0"/>`+
+		`<w:pgMar w:top="%d" w:right="%d" w:bottom="%d" w:left="%d" w:header="%d" w:footer="%d" w:gutter="0"/>`+
 		`</w:sectPr></w:body></w:document>`,
-		pw, ph, orient, mmToTwips(m.Top), mmToTwips(m.Right), mmToTwips(m.Bottom), mmToTwips(m.Left))
+		pw, ph, orient, mmToTwips(m.Top), mmToTwips(m.Right), mmToTwips(m.Bottom), mmToTwips(m.Left),
+		min(720, mmToTwips(m.Top)/2), min(720, mmToTwips(m.Bottom)/2))
 	return b.Bytes()
 }
 

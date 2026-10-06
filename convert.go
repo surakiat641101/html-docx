@@ -4,6 +4,7 @@ package htmldocx
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"io"
 	"math"
@@ -28,9 +29,16 @@ func Convert(r io.Reader, w io.Writer, opts *Options) error {
 
 // ConvertNode converts an already parsed HTML tree. The tree is not modified.
 func ConvertNode(doc *html.Node, w io.Writer, opts *Options) error {
-	c := newConverter(opts.resolve())
-	c.collectStyles(doc)
-	c.sheet.add(c.opts.CSS)
+	var raw Options
+	if opts != nil {
+		raw = *opts
+	}
+	var sheet stylesheet
+	sheet.collect(doc)
+	sheet.add(raw.CSS)
+	sheet.applyPage(&raw) // @page fills in page size/margins not set in Options
+	c := newConverter(raw.resolve())
+	c.sheet = sheet
 	c.scanAnchors(doc)
 	c.walk(doc, runStyle{}, blockStyle{})
 	c.flush()
@@ -59,7 +67,10 @@ func ConvertFile(inPath, outPath string, opts *Options) error {
 		return err
 	}
 	defer in.Close()
-	o := opts.resolve()
+	var o Options // not resolved yet, so @page can still supply size and margins
+	if opts != nil {
+		o = *opts
+	}
 	if o.ImageLoader == nil {
 		o.ImageLoader = FileImageLoader(filepath.Dir(inPath))
 	}
@@ -81,23 +92,30 @@ const (
 
 type runStyle struct {
 	bold, italic, underline, strike tri
+	underlineStyle                  string // Word w:u value when underline is on; "" = single
 	vertAlign                       string
 	caps                            bool
 	color, shading, highlight, font string
 	size                            float64 // points; 0 = inherit
 	link                            string  // attributes of <w:hyperlink>
+	border                          string  // <w:bdr .../> for a boxed inline element
 }
 
 type blockStyle struct {
-	style            string
-	align            string
-	indent           int // twips
-	firstLine        int // twips; negative = hanging
-	shading          string
-	pre, inCell      bool
-	item             *listItem
-	listNum, listLvl int // set inside <ul>/<ol> for their <li> children
-	listDepth        int
+	style               string
+	align               string
+	indent              int // twips
+	firstLine           int // twips; negative = hanging
+	shading             string
+	pre, inCell         bool
+	item                *listItem
+	listNum, listLvl    int // set inside <ul>/<ol> for their <li> children
+	listDepth           int
+	before, after       int  // paragraph spacing in twips
+	beforeSet, afterSet bool // false = use the paragraph style's spacing
+	line                int  // line spacing: 240ths of a line (auto) or twips (atLeast)
+	lineRule            string
+	borders             string // <w:pBdr> content
 }
 
 type listItem struct {
@@ -244,24 +262,39 @@ func (c *converter) element(n *html.Node, rs runStyle, bs blockStyle) {
 		c.walkChildren(n, rs, bs) // only to find <title>; other head tags are skipped
 		return
 	}
-	if skipTags[tag] || hasAttr(n, "hidden") {
+	if hasAttr(n, "hidden") {
 		return
 	}
 	css := c.computeStyle(n)
 	if strings.EqualFold(css["display"], "none") || strings.EqualFold(css["visibility"], "hidden") {
 		return
 	}
+	// data-docx-text replaces an element (e.g. an <svg> checkbox) with text in the .docx.
+	if text, ok := attrValue(n, "data-docx-text"); ok {
+		if text != "" {
+			c.literal(text, c.applyRunCSS(rs, css), bs)
+		}
+		return
+	}
+	if skipTags[tag] {
+		return
+	}
 	c.markBookmark(n, tag)
 
-	block := blockTags[tag]
+	block := isBlock(tag, css)
 	if breakBefore(css) {
 		c.flush()
 		c.out.WriteString(pageBreakXML)
 	}
 
+	outerRS := rs
 	rs, bs = c.tagStyle(tag, n, rs, bs)
+	if block && !blockTags[tag] {
+		bs = resetBlockBox(bs, true) // e.g. <span style="display:block"> behaves like a <div>
+	}
 	rs = c.applyRunCSS(rs, css)
-	if bg, ok := cssBackground(css); ok {
+	// A white background is invisible on paper and only adds noise in Word.
+	if bg, ok := cssBackground(css); ok && bg != "FFFFFF" {
 		switch {
 		case !block:
 			rs.shading = bg
@@ -270,7 +303,22 @@ func (c *converter) element(n *html.Node, rs runStyle, bs blockStyle) {
 		}
 	}
 	if block {
-		bs = c.applyBlockCSS(bs, css, n)
+		bs = c.applyBlockCSS(bs, css, n, c.curSize(rs))
+	} else {
+		if b, ok := cssBorderSide(css, ""); ok {
+			rs.border = "<w:bdr " + b + "/>"
+		} else if s, ok := bottomBorderUnderline(css); ok {
+			// Word has no per-side character borders; a bottom border reads as an underline.
+			rs.underline, rs.underlineStyle = on, s
+		}
+		if m, ok := boxSides(css, "margin", c.curSize(rs)); ok[3] && m[3] >= 1 {
+			c.gap(outerRS)
+		}
+		defer func() {
+			if m, ok := boxSides(css, "margin", c.curSize(rs)); ok[1] && m[1] >= 1 {
+				c.gap(outerRS)
+			}
+		}()
 	}
 
 	switch tag {
@@ -319,6 +367,9 @@ func (c *converter) element(n *html.Node, rs runStyle, bs blockStyle) {
 
 // tagStyle applies the default formatting implied by an element's tag.
 func (c *converter) tagStyle(tag string, n *html.Node, rs runStyle, bs blockStyle) (runStyle, blockStyle) {
+	if blockTags[tag] {
+		bs = resetBlockBox(bs, marginlessTags[tag])
+	}
 	switch tag {
 	case "b", "strong", "dt":
 		rs.bold = on
@@ -403,7 +454,7 @@ func (c *converter) applyRunCSS(rs runStyle, css map[string]string) runStyle {
 		default:
 			if n, err := strconv.Atoi(v); err == nil {
 				rs.bold = off
-				if n >= 600 {
+				if n >= c.opts.BoldWeight {
 					rs.bold = on
 				}
 			}
@@ -417,20 +468,24 @@ func (c *converter) applyRunCSS(rs runStyle, css map[string]string) runStyle {
 			rs.italic = off
 		}
 	}
-	for _, k := range []string{"text-decoration", "text-decoration-line"} {
+	for _, k := range []string{"text-decoration", "text-decoration-line", "text-decoration-style"} {
 		v, ok := css[k]
 		if !ok {
 			continue
 		}
-		v = strings.ToLower(v)
-		if strings.Contains(v, "none") {
-			rs.underline, rs.strike = off, off
-		}
-		if strings.Contains(v, "underline") {
-			rs.underline = on
-		}
-		if strings.Contains(v, "line-through") {
-			rs.strike = on
+		for _, f := range strings.Fields(strings.ToLower(v)) {
+			switch f {
+			case "none":
+				rs.underline, rs.strike = off, off
+			case "underline":
+				rs.underline = on
+			case "line-through":
+				rs.strike = on
+			default:
+				if s, ok := wordLineStyles[f]; ok {
+					rs.underlineStyle = s
+				}
+			}
 		}
 	}
 	if v, ok := css["font-family"]; ok {
@@ -454,7 +509,59 @@ func (c *converter) applyRunCSS(rs runStyle, css map[string]string) runStyle {
 	return rs
 }
 
-func (c *converter) applyBlockCSS(bs blockStyle, css map[string]string, n *html.Node) blockStyle {
+// Block elements whose browser default has no vertical margins. Their
+// paragraphs get zero spacing instead of the Normal style's space after.
+var marginlessTags = setOf("address", "article", "aside", "body", "caption", "center",
+	"dd", "details", "dialog", "div", "dt", "fieldset", "figcaption", "footer", "form",
+	"header", "hgroup", "html", "legend", "main", "nav", "section", "summary")
+
+// specialTags have dedicated handling and ignore CSS display changes.
+var specialTags = setOf("br", "hr", "img", "input", "table", "tr", "td", "th", "ul", "ol",
+	"li", "pre", "html", "body", "q")
+
+func isBlock(tag string, css map[string]string) bool {
+	if !specialTags[tag] {
+		switch strings.ToLower(strings.TrimSpace(css["display"])) {
+		case "block", "flex", "grid", "list-item", "flow-root", "table":
+			return true
+		case "inline", "inline-block", "inline-flex", "inline-grid", "inline-table", "contents":
+			return false
+		}
+	}
+	return blockTags[tag]
+}
+
+// resetBlockBox drops the non-inherited box properties (margins, borders)
+// of the parent block before a nested block applies its own.
+func resetBlockBox(bs blockStyle, marginless bool) blockStyle {
+	bs.before, bs.after = 0, 0
+	bs.beforeSet, bs.afterSet = marginless, marginless
+	bs.borders = ""
+	return bs
+}
+
+func (c *converter) applyBlockCSS(bs blockStyle, css map[string]string, n *html.Node, fontPt float64) blockStyle {
+	if m, ok := boxSides(css, "margin", fontPt); ok[0] || ok[2] {
+		if ok[0] {
+			bs.before, bs.beforeSet = max(0, int(m[0]*20)), true
+		}
+		if ok[2] {
+			bs.after, bs.afterSet = max(0, int(m[2]*20)), true
+		}
+	}
+	if v, ok := css["line-height"]; ok {
+		bs.line, bs.lineRule = parseLineHeight(v, fontPt)
+	}
+	var borders strings.Builder
+	for _, side := range []string{"top", "left", "bottom", "right"} {
+		if b, ok := cssBorderSide(css, side); ok {
+			borders.WriteString("<w:" + side + " " + b + "/>")
+		}
+	}
+	if borders.Len() > 0 {
+		bs.borders = borders.String()
+	}
+
 	align, ok := css["text-align"]
 	if !ok {
 		align = getAttr(n, "align")
@@ -469,16 +576,14 @@ func (c *converter) applyBlockCSS(bs blockStyle, css map[string]string, n *html.
 	case "justify":
 		bs.align = "both"
 	}
-	for _, k := range []string{"margin-left", "padding-left"} {
-		if v, ok := css[k]; ok {
-			if pt, ok := parseLength(v, c.opts.FontSize); ok {
-				bs.indent += int(pt * 20)
-			}
+	for _, prop := range []string{"margin", "padding"} {
+		if m, ok := boxSides(css, prop, fontPt); ok[3] {
+			bs.indent += int(m[3] * 20)
 		}
 	}
 	bs.indent = max(0, min(bs.indent, c.textWidth*3/4))
 	if v, ok := css["text-indent"]; ok {
-		if pt, ok := parseLength(v, c.opts.FontSize); ok {
+		if pt, ok := parseLength(v, fontPt); ok {
 			bs.firstLine = int(pt * 20)
 		}
 	}
@@ -572,6 +677,17 @@ func (c *converter) literal(s string, rs runStyle, bs blockStyle) {
 	p := c.ensurePara(bs)
 	c.writeRun(textXML(s), rs)
 	p.lastSpace = false
+}
+
+// gap writes one space for the horizontal margin of an inline element,
+// unless the line is empty or already ends with a space.
+func (c *converter) gap(rs runStyle) {
+	p := c.para
+	if p == nil || !p.hasContent || p.lastSpace {
+		return
+	}
+	c.writeRun(textXML(" "), rs)
+	p.lastSpace = true
 }
 
 func (c *converter) lineBreak(bs blockStyle) {
@@ -697,11 +813,32 @@ func (c *converter) writePPr(b *bytes.Buffer, bs blockStyle) {
 	if numbered {
 		fmt.Fprintf(&pp, `<w:numPr><w:ilvl w:val="%d"/><w:numId w:val="%d"/></w:numPr>`, bs.item.ilvl, bs.item.numID)
 	}
+	if bs.borders != "" {
+		pp.WriteString("<w:pBdr>" + bs.borders + "</w:pBdr>")
+	}
 	if bs.shading != "" {
 		pp.WriteString(`<w:shd w:val="clear" w:color="auto" w:fill="` + bs.shading + `"/>`)
 	}
 	if bs.inCell && !strings.HasPrefix(style, "Heading") {
-		pp.WriteString(`<w:spacing w:before="0" w:after="0"/>`)
+		if !bs.beforeSet {
+			bs.before, bs.beforeSet = 0, true
+		}
+		if !bs.afterSet {
+			bs.after, bs.afterSet = 0, true
+		}
+	}
+	if bs.beforeSet || bs.afterSet || bs.line > 0 {
+		pp.WriteString("<w:spacing")
+		if bs.beforeSet {
+			fmt.Fprintf(&pp, ` w:before="%d"`, bs.before)
+		}
+		if bs.afterSet {
+			fmt.Fprintf(&pp, ` w:after="%d"`, bs.after)
+		}
+		if bs.line > 0 {
+			fmt.Fprintf(&pp, ` w:line="%d" w:lineRule="%s"`, bs.line, bs.lineRule)
+		}
+		pp.WriteString("/>")
 	}
 	left, first := bs.indent, bs.firstLine
 	switch {
@@ -760,10 +897,11 @@ func writeRPr(b *bytes.Buffer, rs runStyle) {
 	}
 	switch rs.underline {
 	case on:
-		r.WriteString(`<w:u w:val="single"/>`)
+		r.WriteString(`<w:u w:val="` + cmp.Or(rs.underlineStyle, "single") + `"/>`)
 	case off:
 		r.WriteString(`<w:u w:val="none"/>`)
 	}
+	r.WriteString(rs.border)
 	if rs.shading != "" {
 		r.WriteString(`<w:shd w:val="clear" w:color="auto" w:fill="` + rs.shading + `"/>`)
 	}
@@ -1118,7 +1256,7 @@ func (c *converter) table(n *html.Node, rs runStyle, bs blockStyle, css map[stri
 			rowBg, _ = parseColor(getAttr(tr, "bgcolor"))
 		}
 		rowRS := c.applyRunCSS(rs, trCSS)
-		rowBS := c.applyBlockCSS(blockStyle{inCell: true}, trCSS, tr)
+		rowBS := c.applyBlockCSS(blockStyle{inCell: true}, trCSS, tr, c.curSize(rowRS))
 
 		b.WriteString("<w:tr>")
 		if tr.Parent != nil && strings.EqualFold(tr.Parent.Data, "thead") {
@@ -1156,7 +1294,7 @@ func (c *converter) cell(cell *gridCell, rs runStyle, bs blockStyle, rowBg strin
 		bs.align = "center"
 	}
 	rs = c.applyRunCSS(rs, css)
-	bs = c.applyBlockCSS(bs, css, n)
+	bs = c.applyBlockCSS(bs, css, n, c.curSize(rs))
 
 	fill, ok := cssBackground(css)
 	if !ok {
@@ -1241,6 +1379,15 @@ func getAttr(n *html.Node, key string) string {
 		}
 	}
 	return ""
+}
+
+func attrValue(n *html.Node, key string) (string, bool) {
+	for _, a := range n.Attr {
+		if a.Namespace == "" && strings.EqualFold(a.Key, key) {
+			return a.Val, true
+		}
+	}
+	return "", false
 }
 
 func hasAttr(n *html.Node, key string) bool {

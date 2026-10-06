@@ -85,6 +85,7 @@ html2docx -font "TH Sarabun New" -size 16 input.html output.docx
 |---|---|---|
 | `FontFamily` | `Tahoma` | ฟอนต์หลัก (ใช้ทั้งอักษรละตินและไทย) |
 | `FontSize` | `11` | ขนาดฟอนต์ (pt) |
+| `BoldWeight` | `600` | `font-weight` ตัวเลขตั้งแต่ค่านี้ขึ้นไปเป็นตัวหนา (Word มีแค่ปกติ/หนา) — ถ้า HTML ใช้ 500 เป็นตัวเน้น ให้ตั้งเป็น `500` |
 | `PageSize` | `PageA4` | `PageA4`, `PageA5`, `PageLetter`, `PageLegal` หรือกำหนดเอง (mm) |
 | `Landscape` | `false` | แนวนอน |
 | `Margins` | 25.4mm ทุกด้าน | ขอบกระดาษ (mm) |
@@ -115,9 +116,15 @@ html2docx -font "TH Sarabun New" -size 16 input.html output.docx
 - **CSS:** ทั้ง inline `style="..."` และ `<style>` ในเอกสาร
   - Selector: `p`, `*`, `.class`, `#id`, `[attr]`, `[attr="v"]` (`^= $= *= ~= |=`), `div p`, `ul > li`, `h2 + p`, `h2 ~ p`, `:first-child`, `:last-child`, `:nth-child(odd|even|2n+1)`, `:root`
   - Cascade ตาม specificity, ลำดับใน source และ `!important`; ใช้ `@media print` / `all` / `screen` (ไม่สนใจ `max-width` ฯลฯ)
-  - Property: `color`, `background-color`, `font-size`, `font-weight`, `font-style`, `font-family`, `text-decoration`, `text-align`, `text-indent`, `margin-left`, `padding-left`, `vertical-align`, `text-transform: uppercase`, `display: none`, `page-break-before/after`, `break-before/after`
+  - `@page { size; margin }` → ขนาดกระดาษ/แนวกระดาษ/ขอบกระดาษ (ถ้าไม่ได้ตั้งใน Options)
+  - ตัวอักษร: `color`, `background-color`, `font-size`, `font-weight`, `font-style`, `font-family`, `text-decoration` (รวม `dotted`/`dashed`/`double`/`wavy`), `vertical-align`, `text-transform: uppercase`
+  - ย่อหน้า: `text-align`, `text-indent`, `line-height`, `margin` (บน/ล่าง → ระยะห่างย่อหน้า, ซ้าย → เยื้อง), `padding-left`, `border` → เส้นขอบย่อหน้า
+  - Inline: `border` → กรอบรอบตัวอักษร, `border-bottom` → ขีดเส้นใต้, `margin-left/right` → เว้นวรรค
+  - `display: none`, `display: block|flex` (span กลายเป็นย่อหน้า), `display: inline|inline-block` (div ไม่ขึ้นย่อหน้าใหม่), `page-break-*`, `break-*`
+  - `div` และ element ที่ไม่มี margin ใน browser จะไม่มีระยะห่างระหว่างย่อหน้า ส่วน `p` ใช้ระยะห่างปกติ
+- **`data-docx-text="..."`:** ใส่ที่ element ใดก็ได้ (เช่น `<svg>`) เพื่อแทนที่ด้วยข้อความใน .docx เช่น checkbox `<svg data-docx-text="☑">`
 
-**ข้อจำกัด:** ไม่โหลด `<link rel="stylesheet">` เอง (ส่งผ่าน `Options.CSS` แทน), ไม่รองรับ `:hover`/`:not()`/`::before`, shorthand `margin`/`padding`, ไม่รองรับ SVG/WebP, float/flex/grid layout, และ input ต้องเป็น UTF-8
+**ข้อจำกัด:** ไม่โหลด `<link rel="stylesheet">` เอง (ส่งผ่าน `Options.CSS` แทน), ไม่รองรับ `:hover`/`:not()`/`::before`, `position`/flex/grid/float layout (เนื้อหาเรียงเป็นย่อหน้าตามลำดับ), SVG/WebP (ใช้ `data-docx-text` แทน), และ input ต้องเป็น UTF-8
 
 ## Tests
 

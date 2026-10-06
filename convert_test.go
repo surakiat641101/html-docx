@@ -327,3 +327,43 @@ func TestParseSelector(t *testing.T) {
 		}
 	}
 }
+
+func TestBoxModelAndLayout(t *testing.T) {
+	parts := unpack(t, `<style>
+		@page { size: A4 landscape; margin: 36pt 72pt }
+		#doc { line-height: 18pt }
+		.title { margin-bottom: 4pt; border-bottom: 1px solid #000 }
+		.box { border: 0.75pt solid #000; margin-right: 3pt }
+		.medium { font-weight: 500 }
+		.dash { border-bottom: 1px dashed black }
+		.blk { display: block; text-indent: 0 }
+		.inl { display: inline }
+	</style>
+	<div id="doc">
+		<div class="title">หัวเรื่อง</div>
+		<div>a<span class="box">X</span><span class="box">Y</span>b</div>
+		<p>para</p>
+		<div><span class="medium">กลาง</span> <span class="dash">ประ</span></div>
+		<div>first<span class="blk">second</span></div>
+		<div>one <div class="inl">two</div></div>
+		<div>check <svg data-docx-text="☑"><rect/></svg> done</div>
+	</div>`, &Options{BoldWeight: 500})
+	doc := parts["word/document.xml"]
+	mustContain(t, doc,
+		`<w:pgSz w:w="16838" w:h="11906" w:orient="landscape"/>`, `w:top="720" w:right="1440" w:bottom="720" w:left="1440"`,
+		`<w:spacing w:before="0" w:after="80" w:line="360" w:lineRule="atLeast"/>`,
+		`<w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="000000"/></w:pBdr>`,
+		`<w:bdr w:val="single" w:sz="6" w:space="1" w:color="000000"/></w:rPr><w:t xml:space="preserve">X</w:t></w:r><w:r><w:t xml:space="preserve"> </w:t></w:r>`,
+		`<w:b/><w:bCs/></w:rPr><w:t xml:space="preserve">กลาง`,
+		`<w:u w:val="dash"/></w:rPr><w:t xml:space="preserve">ประ`,
+		`>☑</w:t>`)
+	if strings.Contains(doc, "<rect") {
+		t.Error("svg content leaked")
+	}
+	// <p> keeps the Normal style spacing; divs get none.
+	if i := strings.Index(doc, ">para<"); strings.Contains(doc[strings.LastIndex(doc[:i], "<w:p>"):i], `w:after="0"`) {
+		t.Error("<p> should not get zero spacing")
+	}
+	// display:block on a span starts a new paragraph; display:inline on a div does not.
+	mustContain(t, doc, `>first</w:t></w:r></w:p>`, `>one </w:t></w:r><w:r><w:t xml:space="preserve">two</w:t>`)
+}

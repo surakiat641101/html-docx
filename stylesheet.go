@@ -24,6 +24,7 @@ type cssRule struct {
 
 type stylesheet struct {
 	rules []cssRule
+	page  map[string]string // declarations of @page
 }
 
 var cssComment = regexp.MustCompile(`(?s)/\*.*?\*/`)
@@ -49,6 +50,18 @@ func (ss *stylesheet) parse(src string) {
 		body := src[open+1 : end]
 		i = end + 1
 
+		if strings.EqualFold(prelude, "@page") {
+			normal, important := parseDecls(body)
+			for _, m := range []map[string]string{normal, important} {
+				for k, v := range m {
+					if ss.page == nil {
+						ss.page = make(map[string]string)
+					}
+					ss.page[k] = v
+				}
+			}
+			continue
+		}
 		if strings.HasPrefix(prelude, "@") {
 			if q, ok := strings.CutPrefix(strings.ToLower(prelude), "@media"); ok && mediaApplies(q) {
 				ss.parse(body)
@@ -150,17 +163,75 @@ func (c *converter) computeStyle(n *html.Node) map[string]string {
 	return out
 }
 
-// collectStyles gathers every <style> element of the document in order.
-func (c *converter) collectStyles(n *html.Node) {
+// collect gathers every <style> element of the document in order.
+func (ss *stylesheet) collect(n *html.Node) {
 	if n.Type == html.ElementNode && strings.EqualFold(n.Data, "style") {
 		if media := strings.ToLower(getAttr(n, "media")); media == "" || mediaApplies(media) {
-			c.sheet.add(textContent(n))
+			ss.add(textContent(n))
 		}
 		return
 	}
 	for ch := n.FirstChild; ch != nil; ch = ch.NextSibling {
-		c.collectStyles(ch)
+		ss.collect(ch)
 	}
+}
+
+// applyPage fills the page size and margins from @page { size; margin }
+// where Options leaves them unset.
+func (ss *stylesheet) applyPage(o *Options) {
+	if len(ss.page) == 0 {
+		return
+	}
+	if o.Margins == nil {
+		if m, ok := boxSides(ss.page, "margin", 12); ok[0] || ok[1] || ok[2] || ok[3] {
+			mm := func(i int) float64 {
+				if ok[i] {
+					return m[i] * 25.4 / 72
+				}
+				return 25.4
+			}
+			o.Margins = &Margins{mm(0), mm(1), mm(2), mm(3)}
+		}
+	}
+	if v, ok := ss.page["size"]; ok {
+		size, landscape := parsePageSize(v)
+		if o.PageSize.WidthMM <= 0 && size.WidthMM > 0 {
+			o.PageSize = size
+		}
+		if landscape {
+			o.Landscape = true
+		}
+	}
+}
+
+var namedPageSizes = map[string]PageSize{
+	"a3": {297, 420}, "a4": PageA4, "a5": PageA5, "b4": {250, 353}, "b5": {176, 250},
+	"letter": PageLetter, "legal": PageLegal,
+}
+
+// parsePageSize parses the @page size descriptor ("A4 landscape", "210mm 297mm").
+func parsePageSize(v string) (size PageSize, landscape bool) {
+	var lengths []float64
+	for _, f := range strings.Fields(strings.ToLower(v)) {
+		if s, ok := namedPageSizes[f]; ok {
+			size = s
+		} else if f == "landscape" {
+			landscape = true
+		} else if pt, ok := parseLength(f, 12); ok && pt > 0 {
+			lengths = append(lengths, pt*25.4/72)
+		}
+	}
+	if len(lengths) > 0 {
+		w, h := lengths[0], lengths[0]
+		if len(lengths) > 1 {
+			h = lengths[1]
+		}
+		if w > h {
+			w, h, landscape = h, w, true
+		}
+		size = PageSize{w, h}
+	}
+	return size, landscape
 }
 
 // ---------------------------------------------------------------- selectors

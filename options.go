@@ -30,6 +30,10 @@ type Options struct {
 	FontFamily string
 	// FontSize is the default font size in points. Default: 11.
 	FontSize float64
+	// BoldWeight is the smallest numeric CSS font-weight rendered as bold,
+	// since Word has no medium weights. Default: 600. Use 500 when the HTML
+	// marks emphasis with medium weights.
+	BoldWeight int
 
 	// PageSize defaults to A4.
 	PageSize PageSize
@@ -62,6 +66,9 @@ func (o *Options) resolve() Options {
 	}
 	if r.FontSize <= 0 {
 		r.FontSize = 11
+	}
+	if r.BoldWeight <= 0 {
+		r.BoldWeight = 600
 	}
 	if r.PageSize.WidthMM <= 0 || r.PageSize.HeightMM <= 0 {
 		r.PageSize = PageA4

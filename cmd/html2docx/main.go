@@ -17,6 +17,8 @@ func main() {
 	size := flag.Float64("size", 0, "default font size in points (default 11)")
 	landscape := flag.Bool("landscape", false, "landscape orientation")
 	letter := flag.Bool("letter", false, "US Letter paper instead of A4")
+	boldWeight := flag.Int("bold-weight", 0, "smallest CSS font-weight rendered as bold (default 600)")
+	cssFile := flag.String("css", "", "extra stylesheet file applied after the document's <style>")
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: html2docx [flags] input.html [output.docx]")
 		flag.PrintDefaults()
@@ -31,7 +33,15 @@ func main() {
 	if out == "" {
 		out = strings.TrimSuffix(strings.TrimSuffix(in, ".html"), ".htm") + ".docx"
 	}
-	opts := &htmldocx.Options{FontFamily: *font, FontSize: *size, Landscape: *landscape}
+	opts := &htmldocx.Options{FontFamily: *font, FontSize: *size, Landscape: *landscape, BoldWeight: *boldWeight}
+	if *cssFile != "" {
+		css, err := os.ReadFile(*cssFile)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "html2docx:", err)
+			os.Exit(1)
+		}
+		opts.CSS = string(css)
+	}
 	if *letter {
 		opts.PageSize = htmldocx.PageLetter
 	}
