@@ -29,6 +29,8 @@ func Convert(r io.Reader, w io.Writer, opts *Options) error {
 // ConvertNode converts an already parsed HTML tree. The tree is not modified.
 func ConvertNode(doc *html.Node, w io.Writer, opts *Options) error {
 	c := newConverter(opts.resolve())
+	c.collectStyles(doc)
+	c.sheet.add(c.opts.CSS)
 	c.scanAnchors(doc)
 	c.walk(doc, runStyle{}, blockStyle{})
 	c.flush()
@@ -149,6 +151,7 @@ type converter struct {
 	nextBookmark     int
 	nextDocPr        int
 
+	sheet   stylesheet
 	preTrim *html.Node
 	title   string
 }
@@ -244,7 +247,7 @@ func (c *converter) element(n *html.Node, rs runStyle, bs blockStyle) {
 	if skipTags[tag] || hasAttr(n, "hidden") {
 		return
 	}
-	css := parseStyleAttr(getAttr(n, "style"))
+	css := c.computeStyle(n)
 	if strings.EqualFold(css["display"], "none") || strings.EqualFold(css["visibility"], "hidden") {
 		return
 	}
@@ -262,7 +265,7 @@ func (c *converter) element(n *html.Node, rs runStyle, bs blockStyle) {
 		switch {
 		case !block:
 			rs.shading = bg
-		case tag != "table":
+		case tag != "table" && tag != "body" && tag != "html":
 			bs.shading = bg
 		}
 	}
@@ -1109,7 +1112,7 @@ func (c *converter) table(n *html.Node, rs runStyle, bs blockStyle, css map[stri
 	b.WriteString(`</w:tblGrid>`)
 
 	for r, tr := range rows {
-		trCSS := parseStyleAttr(getAttr(tr, "style"))
+		trCSS := c.computeStyle(tr)
 		rowBg, _ := cssBackground(trCSS)
 		if rowBg == "" {
 			rowBg, _ = parseColor(getAttr(tr, "bgcolor"))
@@ -1147,7 +1150,7 @@ func (c *converter) table(n *html.Node, rs runStyle, bs blockStyle, css map[stri
 func (c *converter) cell(cell *gridCell, rs runStyle, bs blockStyle, rowBg string, colW int) {
 	n := cell.n
 	header := strings.EqualFold(n.Data, "th")
-	css := parseStyleAttr(getAttr(n, "style"))
+	css := c.computeStyle(n)
 	if header {
 		rs.bold = on
 		bs.align = "center"

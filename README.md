@@ -90,6 +90,7 @@ html2docx -font "TH Sarabun New" -size 16 input.html output.docx
 | `Margins` | 25.4mm ทุกด้าน | ขอบกระดาษ (mm) |
 | `Title`, `Subject`, `Author`, `Keywords` | — | Document properties (`Title` ใช้ `<title>` ถ้าไม่กำหนด) |
 | `ImageLoader` | `nil` | วิธีโหลดรูปที่ไม่ใช่ `data:` URI |
+| `CSS` | — | stylesheet เพิ่มเติม (เช่นเนื้อหาไฟล์ `.css` ที่อ้างด้วย `<link>`) ใช้หลัง `<style>` ในเอกสาร |
 
 ### รูปภาพ
 
@@ -111,9 +112,12 @@ html2docx -font "TH Sarabun New" -size 16 input.html output.docx
 - **Table:** `thead` (ทำซ้ำหัวตารางทุกหน้า), `th`, `colspan`, `rowspan`, `caption`, `bgcolor`, `align`, `valign`, `border="0"`
 - **Image:** `img`
 - **Form:** `input type="checkbox|radio"` แสดงเป็น ☐ ☒ ○ ◉
-- **Inline CSS (`style="..."`):** `color`, `background-color`, `font-size`, `font-weight`, `font-style`, `font-family`, `text-decoration`, `text-align`, `text-indent`, `margin-left`, `padding-left`, `vertical-align`, `text-transform: uppercase`, `display: none`, `page-break-before/after`, `break-before/after`
+- **CSS:** ทั้ง inline `style="..."` และ `<style>` ในเอกสาร
+  - Selector: `p`, `*`, `.class`, `#id`, `[attr]`, `[attr="v"]` (`^= $= *= ~= |=`), `div p`, `ul > li`, `h2 + p`, `h2 ~ p`, `:first-child`, `:last-child`, `:nth-child(odd|even|2n+1)`, `:root`
+  - Cascade ตาม specificity, ลำดับใน source และ `!important`; ใช้ `@media print` / `all` / `screen` (ไม่สนใจ `max-width` ฯลฯ)
+  - Property: `color`, `background-color`, `font-size`, `font-weight`, `font-style`, `font-family`, `text-decoration`, `text-align`, `text-indent`, `margin-left`, `padding-left`, `vertical-align`, `text-transform: uppercase`, `display: none`, `page-break-before/after`, `break-before/after`
 
-**ข้อจำกัด:** ไม่อ่าน CSS จาก `<style>` / stylesheet (ใช้เฉพาะ inline style), ไม่รองรับ SVG/WebP, float/flex/grid layout, และ input ต้องเป็น UTF-8
+**ข้อจำกัด:** ไม่โหลด `<link rel="stylesheet">` เอง (ส่งผ่าน `Options.CSS` แทน), ไม่รองรับ `:hover`/`:not()`/`::before`, shorthand `margin`/`padding`, ไม่รองรับ SVG/WebP, float/flex/grid layout, และ input ต้องเป็น UTF-8
 
 ## Tests
 

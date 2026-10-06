@@ -6,13 +6,9 @@ import (
 	"strings"
 )
 
-// parseStyleAttr parses an inline style="" attribute into lower-cased
-// property names mapped to their values.
-func parseStyleAttr(s string) map[string]string {
-	if s == "" {
-		return nil
-	}
-	m := make(map[string]string)
+// parseDecls parses a CSS declaration list ("color: red; ...") into
+// lower-cased property names mapped to values, split by !important.
+func parseDecls(s string) (normal, important map[string]string) {
 	for _, decl := range strings.Split(s, ";") {
 		k, v, ok := strings.Cut(decl, ":")
 		if !ok {
@@ -20,14 +16,23 @@ func parseStyleAttr(s string) map[string]string {
 		}
 		k = strings.ToLower(strings.TrimSpace(k))
 		v = strings.TrimSpace(v)
+		imp := false
 		if i := strings.Index(strings.ToLower(v), "!important"); i >= 0 {
-			v = strings.TrimSpace(v[:i])
+			v, imp = strings.TrimSpace(v[:i]), true
 		}
-		if k != "" && v != "" {
-			m[k] = v
+		if k == "" || v == "" {
+			continue
 		}
+		target := &normal
+		if imp {
+			target = &important
+		}
+		if *target == nil {
+			*target = make(map[string]string)
+		}
+		(*target)[k] = v
 	}
-	return m
+	return normal, important
 }
 
 var namedColors = map[string]string{

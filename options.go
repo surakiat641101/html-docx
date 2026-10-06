@@ -41,6 +41,11 @@ type Options struct {
 	// Document properties. Title defaults to the HTML <title>.
 	Title, Subject, Author, Keywords string
 
+	// CSS is an extra stylesheet applied after the document's <style> blocks,
+	// e.g. the contents of a <link rel="stylesheet"> file (which is not loaded
+	// automatically).
+	CSS string
+
 	// ImageLoader resolves non-data: image sources. When nil, only data: URIs
 	// are embedded and other images are replaced with their alt text.
 	// See FileImageLoader and HTTPImageLoader.

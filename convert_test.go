@@ -239,3 +239,91 @@ func TestParseColor(t *testing.T) {
 		}
 	}
 }
+
+func TestStyleSheet(t *testing.T) {
+	doc := unpack(t, `<html><head><style>
+		/* comment */
+		@import url(x.css);
+		body { background: #fff; color: #333333 }
+		.title { color: blue; font-size: 20pt }
+		#main p.note { font-style: italic }
+		.box > span { font-weight: bold }
+		h2 + p { text-align: center }
+		a[href^="https"] { color: green }
+		.hidden, .screen-only { display: none }
+		table.grid tr:nth-child(even) td { background-color: #eeeeee }
+		td:first-child { text-align: right }
+		p.imp { color: red !important }
+		p:hover { color: purple }
+		@media print { .print { text-decoration: underline } }
+		@media (max-width: 600px) { .print { color: yellow } }
+	</style></head><body>
+		<p class="title">หัวเรื่อง</p>
+		<div id="main"><p class="note">หมายเหตุ</p><p>ปกติ</p></div>
+		<div class="box"><span>หนา</span><em><span>ไม่หนา</span></em></div>
+		<h2>H</h2><p>กลาง</p>
+		<p><a href="https://x.com">link</a></p>
+		<p class="hidden">ซ่อน</p>
+		<table class="grid"><tr><td>1</td><td>a</td></tr><tr><td>2</td><td>b</td></tr></table>
+		<p class="imp" style="color: black">แดง</p>
+		<p class="print">พิมพ์</p>
+	</body></html>`, nil)["word/document.xml"]
+
+	run := func(text string) string {
+		i := strings.Index(doc, ">"+text+"</w:t>")
+		if i < 0 {
+			t.Fatalf("text %q not found", text)
+		}
+		start := strings.LastIndex(doc[:i], "<w:p>")
+		return doc[start:i]
+	}
+	mustContain(t, run("หัวเรื่อง"), `<w:color w:val="0000FF"/>`, `<w:sz w:val="40"/>`)
+	mustContain(t, run("หมายเหตุ"), `<w:i/>`)
+	if strings.Contains(run("ปกติ"), "<w:i/>") {
+		t.Error("p without .note should not be italic")
+	}
+	mustContain(t, run("ปกติ"), `<w:color w:val="333333"/>`)
+	mustContain(t, run("หนา"), `<w:b/>`)
+	if r := run("ไม่หนา"); strings.Contains(r[strings.LastIndex(r, "<w:r>"):], "<w:b/>") {
+		t.Error("child combinator matched a grandchild")
+	}
+	mustContain(t, run("กลาง"), `<w:jc w:val="center"/>`)
+	mustContain(t, run("link"), `<w:color w:val="008000"/>`)
+	mustContain(t, run("แดง"), `<w:color w:val="FF0000"/>`)
+	mustContain(t, run("พิมพ์"), `<w:u w:val="single"/>`)
+	if strings.Contains(run("พิมพ์"), "FFFF00") {
+		t.Error("max-width media query should be ignored")
+	}
+	if strings.Contains(doc, "ซ่อน") {
+		t.Error("display:none from class was not applied")
+	}
+	if strings.Contains(doc, `w:fill="FFFFFF"`) {
+		t.Error("body background should not shade paragraphs")
+	}
+	if n := strings.Count(doc, `w:fill="EEEEEE"`); n != 2 {
+		t.Errorf("nth-child(even) should shade 2 cells, got %d", n)
+	}
+	if n := strings.Count(doc, `<w:jc w:val="right"/>`); n != 2 {
+		t.Errorf("td:first-child should align 2 cells, got %d", n)
+	}
+}
+
+func TestOptionsCSS(t *testing.T) {
+	doc := unpack(t, `<style>.x{color:red}</style><p class="x">t</p>`, &Options{CSS: ".x{color:blue}"})["word/document.xml"]
+	mustContain(t, doc, `<w:color w:val="0000FF"/>`)
+}
+
+func TestParseSelector(t *testing.T) {
+	valid := []string{"p", "*", ".a.b", "#id", "div p", "ul > li", "h1 + p", "h1 ~ p", "a[href]", `a[target="_blank"]`,
+		"tr:nth-child(2n+1)", "li:nth-child(-n+3)", "li:last-child", ":root", "ul>li"}
+	for _, s := range valid {
+		if _, _, ok := parseSelector(s); !ok {
+			t.Errorf("parseSelector(%q) failed", s)
+		}
+	}
+	for _, s := range []string{"", "a:hover", "p::before", "div >", "> p", ".", "#"} {
+		if _, _, ok := parseSelector(s); ok {
+			t.Errorf("parseSelector(%q) should fail", s)
+		}
+	}
+}
